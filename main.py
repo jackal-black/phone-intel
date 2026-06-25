@@ -1,93 +1,67 @@
 #!/usr/bin/env python3
 """
-Phone Monitor — 手机新品发布情报监控系统
+📱 Phone Intel — 手机新品发布情报监控系统 (Prefect Workflow)
 
-多数据源（Tavily）搜索 → LLM 去重/归类/摘要 → 飞书推送
+基于 Prefect 工作流引擎的任务编排，展示完整的 DAG 工作流：
+  并行搜索 → LLM 分析 → 飞书推送
 
 用法:
-    python main.py                    # 正常运行
-    DRY_RUN=true python main.py       # 仅打印日报，不推送飞书
-    python main.py --help             # 查看帮助
+    python main.py                      # 运行一次工作流
+    python main.py --dry-run            # 测试模式（仅打印）
+    python main.py --schedule           # 启动定时调度（每天 09:00）
+
+依赖:
+    pip install prefect requests
 """
 
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 
-from phone_monitor.analyzer import analyze_news
 from phone_monitor.config import Config
-from phone_monitor.notifier import push_to_feishu
-from phone_monitor.searcher import search_all_brands
-
-# ── 日志配置 ──
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("phone-monitor")
+from workflow import daily_report_flow
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="📱 手机新品发布情报监控系统",
-        epilog="示例: DRY_RUN=true python main.py",
+        description="📱 Phone Intel — 手机竞品情报日报 Workflow",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="仅打印结果，不推送飞书",
     )
+    parser.add_argument(
+        "--schedule",
+        action="store_true",
+        help="启动 Prefect 定时调度（每天 09:00），保持进程常驻",
+    )
     args = parser.parse_args()
 
-    # ── 1. 加载配置 ──
     config = Config.from_env()
     if args.dry_run:
         config.dry_run = True
 
     missing = config.validate()
     if missing:
-        logger.error("❌ 缺少必要配置项，请先设置 .env 文件：\n  " + "\n  ".join(missing))
+        print("❌ 缺少必要配置项，请先设置 .env 文件：")
+        for item in missing:
+            print(f"   - {item}")
         sys.exit(1)
 
-    logger.info("=" * 50)
-    logger.info("📱 Phone Monitor 启动")
-    logger.info("   品牌: %s", ", ".join(config.brands))
-    logger.info("   LLM: %s @ %s", config.llm_model, config.llm_base_url)
-    logger.info("   推送: %s", "❌ 仅打印 (DRY_RUN)" if config.dry_run else "✅ 飞书")
-    logger.info("=" * 50)
-
-    # ── 2. 搜索所有品牌 ──
-    results = search_all_brands(config.brands, config.tavily_api_key)
-
-    if not results:
-        logger.warning("⚠️  未搜索到任何结果")
-        _print_and_push("## 📱 手机新品情报日报\n\n今日无相关资讯。", config)
-        return
-
-    # ── 3. LLM 分析 ──
-    report = analyze_news(results, config.llm_api_key, config.llm_base_url, config.llm_model)
-
-    # ── 4. 输出/推送 ──
-    _print_and_push(report, config)
-
-    logger.info("✅ 完成！")
-
-
-def _print_and_push(report: str, config: Config) -> None:
-    """打印日报并（可选）推送到飞书"""
-    # 总是打印到控制台
-    print("\n" + "─" * 50)
-    print(report)
-    print("─" * 50 + "\n")
-
-    # 非 dry-run 时推送飞书
-    if not config.dry_run:
-        success = push_to_feishu(report, config.feishu_webhook_url)
-        if not success:
-            logger.warning("⚠️  飞书推送失败，日报已打印到上方")
+    if args.schedule:
+        print("⏰ 启动定时调度（每天 09:00）...")
+        print("   保持此进程运行，或部署到 Prefect Server")
+        print("   按 Ctrl+C 停止\n")
+        daily_report_flow.serve(
+            name="phone-intel-daily",
+            cron="0 9 * * *",
+            tags=["phone-intel", "daily-report"],
+        )
+    else:
+        # 运行一次
+        daily_report_flow(config)
 
 
 if __name__ == "__main__":

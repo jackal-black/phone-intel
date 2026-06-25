@@ -1,137 +1,127 @@
-# 📱 Phone Monitor — 手机新品发布情报监控系统
+# 📱 Phone Intel — 手机竞品情报日报 Workflow
 
-> 多品牌竞品情报自动化监控，搜索 → LLM 分析 → 飞书推送，全自动每日运行。
-
----
-
-## 效果预览
-
-每天 09:00 自动推送以下内容到飞书群：
-
-```
-📱 手机新品情报日报（2025-01-15）
-
-🔵 OPPO
-- **OPPO Find X8 Ultra** | 1月 | 骁龙8 Elite+双潜望长焦，主打影像旗舰
-  - 来源: IT之家 | 影响: 新品曝光
-
-⚪ iPhone
-- **iPhone SE 4** | 预计3月发布 | OLED屏+自研5G基带，起售价或低于4000元
-  - 来源: 威锋网 | 影响: 预热曝光
-
-📊 今日总结
-- 今日最重磅: OPPO Find X8 Ultra 影像规格曝光
-- 趋势观察: 各品牌 Q1 新机节奏明显加速
-```
+> **Prefect 工作流引擎 + Tavily 搜索 + DeepSeek LLM + 飞书推送**
+> 
+> 不只是一个脚本——这是一个完整的 **DAG 工作流**项目，展示任务编排、并行调度、自动重试、条件分支等 workflow 核心概念。
 
 ---
 
-## 架构
+## 工作流 DAG
 
-```mermaid
-graph TD
-    A[定时触发 Cron] --> B[搜索所有品牌]
-    B --> C[LLM 去重+归类+摘要]
-    C --> D[飞书推送]
-    
-    B -->|Tavily API| B1[搜索 OPPO]
-    B -->|Tavily API| B2[搜索 vivo]
-    B -->|Tavily API| B3[搜索 华为]
-    B -->|Tavily API| B4[搜索 iPhone]
 ```
+                         ┌─ task_search_brand("OPPO") ─┐
+                         ├─ task_search_brand("vivo")  ├─┐
+  Flow 启动 ─→ 并行搜索 ──┼─ task_search_brand("华为")  ├─→ task_flatten_results
+                         └─ task_search_brand("iPhone")┘─┘
+                                                              │
+                                                              ↓
+                                                   task_analyze (LLM 去重/归类/摘要)
+                                                              │
+                                                              ↓
+                                                   task_notify (飞书推送 / 打印)
+```
+
+### 工作流特性
+
+| 特性 | 实现方式 | 代码位置 |
+|------|----------|----------|
+| **DAG 编排** | Prefect `@flow` 定义有向无环图 | `workflow.py:122` |
+| **并行任务** | `task.submit()` 异步提交，4品牌同时搜索 | `workflow.py:136-139` |
+| **自动重试** | `@task(retries=2, retry_delay_seconds=10)` | `workflow.py:35` |
+| **超时控制** | `@task(timeout_seconds=30)` 防止 API 卡死 | `workflow.py:36` |
+| **条件分支** | 无结果时跳过 LLM 调用，节省 tokens | `workflow.py:86-89` |
+| **定时调度** | `Flow.serve(cron="0 9 * * *")` 每日自动运行 | `main.py:53` |
+| **任务追踪** | Prefect Server 可视化查看每次运行状态 | 启动后访问 `http://localhost:8268` |
 
 ---
 
 ## 快速开始
 
-### 1. 克隆 / 下载
+### 1. 安装
 
 ```bash
-cd phone-monitor
+pip install -r requirements.txt
 ```
 
-### 2. 配置 API Key
+### 2. 配置
 
 ```bash
 cp .env.example .env
-vi .env   # 填入你的 API Key
+# 填入 TAVILY_API_KEY, LLM_API_KEY, FEISHU_WEBHOOK_URL
 ```
 
-需要准备：
-
-| 服务 | 用途 | 获取方式 | 费用 |
-|------|------|----------|------|
-| **Tavily** | 搜素引擎 API | [app.tavily.com](https://app.tavily.com) 注册 | 免费 1000 次/月 |
-| **DeepSeek** | LLM 分析 | [platform.deepseek.com](https://platform.deepseek.com) 充值 | ~¥0.5/千次 |
-| **飞书机器人** | 消息推送 | 飞书群 → 设置 → 群机器人 → Webhook | 免费 |
-
-> **省钱提示**：每天 1 次搜索+分析 ≈ 0.01 元/天（DeepSeek）
-
-### 3. 安装 & 运行
+### 3. 运行
 
 ```bash
-# 一键部署
-chmod +x setup.sh
-./setup.sh
+# 运行一次工作流
+python main.py
 
-# 或手动操作
-pip install -r requirements.txt
-python main.py                    # 正式运行
-DRY_RUN=true python main.py       # 测试模式（仅打印）
+# 测试模式（仅打印，不推送）
+python main.py --dry-run
+
+# 启动定时调度（每天 09:00 自动运行）
+python main.py --schedule
 ```
 
-### 4. 设置定时任务
+### 4. 查看工作流状态
 
-```bash
-# 每天 09:00 自动运行
-crontab -e
-# 添加一行：
-0 9 * * * cd /path/to/phone-monitor && venv/bin/python main.py >> cron.log 2>&1
+运行 `python main.py` 时 Prefect 会自动启动一个临时 Web UI：
+
 ```
+http://localhost:8268
+```
+
+可以查看：
+- 每次 Flow Run 的执行状态 ✅ / ❌
+- 每个 Task 的耗时、重试次数、输入输出
+- 整个 DAG 的可视化图谱
 
 ---
 
 ## 项目结构
 
 ```
-phone-monitor/
-├── main.py                   # 入口 + 流程编排
+phone-intel/
+├── workflow.py              # 📌 Prefect 工作流定义 (@flow + @task)
+├── main.py                  # 入口：运行工作流 / 启动定时调度
 ├── phone_monitor/
-│   ├── __init__.py
-│   ├── __main__.py           # 支持 python -m phone_monitor
-│   ├── config.py             # 配置管理（环境变量）
-│   ├── searcher.py           # 搜索模块（Tavily API）
-│   ├── analyzer.py           # LLM 分析模块（去重/归类/摘要）
-│   └── notifier.py           # 飞书推送模块
-├── .env.example              # 配置模板
-├── requirements.txt          # 依赖（仅 requests）
-├── setup.sh                  # 一键部署脚本
+│   ├── searcher.py          # Tavily 搜索（被 task 封装）
+│   ├── analyzer.py          # LLM 分析（被 task 封装）
+│   ├── notifier.py          # 飞书推送（被 task 封装）
+│   └── config.py            # 配置管理
+├── requirements.txt         # prefect + requests
+├── .env.example             # 配置模板
+├── .gitignore
+├── setup.sh                 # 一键部署脚本
 └── README.md
 ```
 
 ---
 
-## 自定义
+## 简历价值
 
-| 需求 | 改哪里 |
-|------|--------|
-| 换品牌 | 修改 `.env` 中的 `BRANDS` |
-| 换 LLM | 修改 `.env` 中的 `LLM_BASE_URL` + `LLM_MODEL` + `LLM_API_KEY` |
-| 换推送渠道 | 修改 `notifier.py` 中的 `push_to_feishu()`（支持钉钉/Slack 等） |
-| 改分析逻辑 | 修改 `analyzer.py` 中的 `system_prompt` |
-| 调搜索深度 | 修改 `searcher.py` 中的 `search_depth: "advanced"` |
+### 技术栈关键词
+
+`Prefect` · `Workflow Engine` · `DAG` · `Task Orchestration` · `Parallel Execution` · `Retry Policy` · `Timeout Control` · `Conditional Branching` · `Cron Scheduling` · `LLM Pipeline` · `Tavily API` · `Feishu Webhook`
+
+### 简历项目描述模板
+
+> **Phone Intel — 基于 Prefect 工作流的竞品情报自动化系统**
+> 
+> 使用 Prefect 工作流引擎搭建端到端 ETL + LLM 分析流水线。通过 `@flow`/`@task` 实现 DAG 编排，`task.submit()` 实现 4 品牌并行搜索，`retries=2` + `timeout_seconds=30` 保障 API 稳定性，条件分支跳过空结果 LLM 调用以节约成本。每日定时调度自动产出竞品日报，推送至飞书。可作为通用情报监控模板复用。
+>
+> *GitHub: github.com/jackal-black/phone-intel*
 
 ---
 
-## 简历价值
+## 扩展方向
 
-这个项目可以展示以下技术能力：
-
-- **Python 工程** — 模块化设计、异常处理、日志、类型注解
-- **LLM 应用** — Prompt 工程、结构化输出控制、降级策略
-- **API 集成** — Tavily Search、LLM API、飞书 Webhook
-- **自动化运维** — Cron 定时任务、环境变量配置、一键部署脚本
-- **数据处理** — 数据清洗、去重、归类、摘要
+| 方向 | 实现 | 简历加分点 |
+|------|------|-----------|
+| **Prefect Server 部署** | Docker Compose 启动 Prefect Server + Worker | "分布式工作流部署" |
+| **子工作流 (Subflow)** | 每个品牌独立子工作流 | "Workflow 嵌套与复用" |
+| **缓存策略** | `cache_key_fn=task_input_hash` | "幂等性与增量计算" |
+| **异步 Task** | `async def` + `httpx.AsyncClient` | "异步并发优化" |
 
 ---
 
