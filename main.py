@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-📱 Phone Intel — 手机新品发布情报监控系统 (Prefect Workflow)
+📱 Phone Intel — 手机新品发布情报监控系统 (Async Prefect Workflow)
 
-基于 Prefect 工作流引擎的任务编排，展示完整的 DAG 工作流：
+异步工作流引擎：
   并行搜索 → LLM 分析 → 飞书推送
+  全程 httpx.AsyncClient 非阻塞 IO
 
 用法:
     python main.py                      # 运行一次工作流
     python main.py --dry-run            # 测试模式（仅打印）
     python main.py --schedule           # 启动定时调度（每天 09:00）
-
-依赖:
-    pip install prefect requests
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 
 from phone_monitor.config import Config
@@ -52,7 +51,6 @@ def main() -> None:
 
     if args.schedule:
         print("⏰ 启动定时调度（每天 09:00）...")
-        print("   保持此进程运行，或部署到 Prefect Server")
         print("   按 Ctrl+C 停止\n")
         daily_report_flow.serve(
             name="phone-intel-daily",
@@ -60,8 +58,8 @@ def main() -> None:
             tags=["phone-intel", "daily-report"],
         )
     else:
-        # 运行一次
-        daily_report_flow(config)
+        # async flow 需要在事件循环中执行
+        asyncio.run(daily_report_flow(config))
 
 
 if __name__ == "__main__":
